@@ -14,6 +14,7 @@ type UsersResponse struct {
 		Edges []struct {
 			Node struct {
 				ID           string
+				Email        string
 				CheckinDate  time.Time
 				CheckoutDate time.Time
 			}
@@ -23,7 +24,6 @@ type UsersResponse struct {
 
 type EventsResponse struct {
 	Events []struct {
-		Date string
 		User string
 		Type string
 	}
@@ -35,7 +35,8 @@ func getAllUsers(client *graphql.Client) (users UsersResponse) {
         users{
 			edges{
 			  node{
-			   	id
+				id
+				email
 				checkin_date
 				checkout_date
 			  }
@@ -56,7 +57,6 @@ func getEventsToday(client *graphql.Client, today string) (events EventsResponse
 	req := graphql.NewRequest(`
     query ($filter: String) {
         events (filter:$filter) {
-			date
     		user
     		type
 		}
@@ -71,22 +71,54 @@ func getEventsToday(client *graphql.Client, today string) (events EventsResponse
 	return
 }
 
-func getAbsences() {
+type EventResponse struct {
+	CreateEvent struct {
+		ID string
+	}
+}
 
+func hasInEvent(id string, events_today EventsResponse) (res bool) {
+	res = false
+	for _, event := range events_today.Events {
+		if event.User == id && event.Type == "IN" {
+			res = true
+			return
+		}
+	}
 	return
 }
 
-func getDelays() {
+func putAbsences(client *graphql.Client, users UsersResponse, events_today EventsResponse) (new_events []EventResponse) {
+	for _, user := range users.Users.Edges {
+		if !hasInEvent(user.Node.ID, events_today) {
+			req := graphql.NewRequest(`
+    			mutation ($new_event: NewEvent!) {
+    			    createEvent (input:$new_event) {
+						id
+					}
+				}`)
+			req.Var("new_event", map[string]string{
+				"user_email": user.Node.Email,
+				"type":       "ABSENCE",
+			})
+			req.Header.Set("Cache-Control", "no-cache")
+			ctx := context.Background()
 
+			var new_event EventResponse
+			if err := client.Run(ctx, req, &new_event); err != nil {
+				log.Fatal(err)
+			}
+			new_events = append(new_events, new_event)
+		}
+	}
 	return
 }
 
 func main() {
 	client := graphql.NewClient("http://localhost:3000/gql") // TODO: put in env
-	// users := getAllUsers(client)
-	// fmt.Println(users)
-
+	users := getAllUsers(client)
 	today := time.Now()
 	events_today := getEventsToday(client, today.Format("2006-01-02"))
-	fmt.Println(events_today)
+	new_events := putAbsences(client, users, events_today)
+	fmt.Printf("%d users with absences at %s\n", len(new_events), today.Format("2006-01-02"))
 }
